@@ -4,6 +4,8 @@
 #include "common.h"
 #include "dispatch.h"
 
+#include <c10/cuda/CUDAException.h>
+
 #include "so3.h"
 #include "rxso3.h"
 #include "se3.h"

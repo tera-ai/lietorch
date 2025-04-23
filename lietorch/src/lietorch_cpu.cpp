@@ -1,4 +1,3 @@
-
 #include "lietorch_cpu.h"
 #include <Eigen/Dense>
 
@@ -631,7 +630,7 @@ torch::Tensor orthogonal_projector_cpu(int group_id, torch::Tensor X) {
     int batch_size = X.size(0);
     torch::Tensor P;
     
-    DISPATCH_GROUP_AND_FLOATING_TYPES(group_id, X.type(), "orthogonal_projector_kernel", ([&] {
+    DISPATCH_GROUP_AND_FLOATING_TYPES(group_id, X.scalar_type(), "orthogonal_projector_kernel", ([&] {
         P = torch::zeros({X.size(0), group_t::N, group_t::N}, X.options());
         orthogonal_projector_kernel<group_t, scalar_t>(X.data_ptr<scalar_t>(), P.data_ptr<scalar_t>(), batch_size);
     }));
@@ -645,7 +644,7 @@ torch::Tensor jleft_forward_cpu(int group_id, torch::Tensor X, torch::Tensor a) 
     int batch_size = X.size(0);
     torch::Tensor b = torch::zeros(a.sizes(), a.options());
 
-    DISPATCH_GROUP_AND_FLOATING_TYPES(group_id, X.type(), "jleft_forward_kernel", ([&] {
+    DISPATCH_GROUP_AND_FLOATING_TYPES(group_id, X.scalar_type(), "jleft_forward_kernel", ([&] {
         jleft_forward_kernel<group_t, scalar_t>(
             X.data_ptr<scalar_t>(), 
             a.data_ptr<scalar_t>(), 

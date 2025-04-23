@@ -1,4 +1,3 @@
-
 #include "lietorch_gpu.h"
 #include <Eigen/Dense>
 
@@ -573,7 +572,7 @@ torch::Tensor orthogonal_projector_gpu(int group_id, torch::Tensor X) {
     int batch_size = X.size(0);
     torch::Tensor P;
 
-    DISPATCH_GROUP_AND_FLOATING_TYPES(group_id, X.type(), "orthogonal_projector_kernel", ([&] {
+    DISPATCH_GROUP_AND_FLOATING_TYPES(group_id, X.scalar_type(), "orthogonal_projector_kernel", ([&] {
         P = torch::zeros({X.size(0), group_t::N, group_t::N}, X.options());
         orthogonal_projector_kernel<group_t, scalar_t><<<NUM_BLOCKS(batch_size), NUM_THREADS>>>(
             X.data_ptr<scalar_t>(), 
@@ -581,6 +580,7 @@ torch::Tensor orthogonal_projector_gpu(int group_id, torch::Tensor X) {
             batch_size);
     }));
 
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
     return P;
 }
 
@@ -589,7 +589,7 @@ torch::Tensor jleft_forward_gpu(int group_id, torch::Tensor X, torch::Tensor a) 
     int batch_size = X.size(0);
     torch::Tensor b = torch::zeros(a.sizes(), a.options());
 
-    DISPATCH_GROUP_AND_FLOATING_TYPES(group_id, X.type(), "jleft_forward_kernel", ([&] {
+    DISPATCH_GROUP_AND_FLOATING_TYPES(group_id, X.scalar_type(), "jleft_forward_kernel", ([&] {
         jleft_forward_kernel<group_t, scalar_t><<<NUM_BLOCKS(batch_size), NUM_THREADS>>>(
             X.data_ptr<scalar_t>(), 
             a.data_ptr<scalar_t>(), 
@@ -597,5 +597,6 @@ torch::Tensor jleft_forward_gpu(int group_id, torch::Tensor X, torch::Tensor a) 
             batch_size);
     }));
 
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
     return b;
 }

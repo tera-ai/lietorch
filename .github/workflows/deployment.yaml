@@ -1,0 +1,193 @@
+name: Build and Release Wheels
+
+on:
+  push:
+    branches:
+    - main
+  release:
+    types:
+    - published
+
+# Avoid running multiple tests in parallel
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-wheels:
+    # Use the Jetson AGX self-hosted runner so the build can access ARM binaries directly
+    runs-on: [self-hosted, Linux, ARM64]
+
+    permissions:
+      contents: read
+      packages: write
+
+    env:
+      # Weird bug when using self-hosted runners with Docker:
+      # https://github.com/actions/runner/issues/434#issuecomment-617004221
+      RUNNER_ALLOW_RUNASROOT: 1
+      # Use an isolated Docker config directory so that any pre-existing gcloud-based credential helpers on the runner
+      # do not interfere with the service-account authentication configured below.
+      DOCKER_CONFIG: ${{ github.workspace }}/.docker
+
+    steps:
+      - name: Load private SSH key
+        id: sshkey
+        run: |
+          echo "::add-mask::$(cat ~/.ssh/id_ed25519)"
+          echo "ssh_key<<EOF" >> $GITHUB_OUTPUT
+          cat ~/.ssh/id_ed25519 >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Add github.com to known_hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+
+      - name: Checkout repository via SSH
+        uses: actions/checkout@v4
+        with:
+          path: src-${{ github.run_id }} # TODO: find a way to clean up periodically
+          ssh-key: ${{ steps.sshkey.outputs.ssh_key }}
+          persist-credentials: false
+          token: ${{ github.token }}
+
+      # - name: Checkout code
+      #   uses: actions/checkout@v4
+
+      # - name: Set up Python
+      #   uses: actions/setup-python@v4
+      #   with:
+      #     python-version: ${{ matrix.python }}
+
+      # - name: Setup CUDA ${{ matrix.cuda }}
+      #   if: matrix.cuda
+      #   uses: Jimver/cuda-toolkit@v0.2.11
+      #   with:
+      #     cuda: ${{ matrix.cuda }}
+      #     method: 'network'
+
+      # - name: Install build dependencies
+      #   run: |
+      #     python -m pip install --upgrade pip
+      #     pip install wheel setuptools build torch
+
+      # Login to Google Artifact Registry using a Service Account key.
+      - name: Authenticate to Google Artifact Registry
+        uses: docker/login-action@v3
+        with:
+          registry: us-west1-docker.pkg.dev
+          username: _json_key
+          password: ${{ secrets.GAR_JSON_KEY }}
+
+      # NOTE: This assumes that the image contains wheel, setuptools, build, and torch.
+      # It's being done this way because the wheel requires to be built on an NX with jetpack6.
+      - name: Pull latest image
+        run: |
+          docker pull us-west1-docker.pkg.dev/tera-earth-dev/jetson/jp6:latest
+
+      - name: Run tests
+        run: |
+          docker run \
+            --runtime nvidia \
+            --rm \
+            -e DEV_IMAGE=true \
+            us-west1-docker.pkg.dev/tera-earth-dev/jetson/jp6:latest \
+            python -m unittest tests/test_main.py
+
+      - name: Build wheel
+        run: |
+          # Set variables for build identification
+          JETPACK_VERSION=$(dpkg -l | grep nvidia-jetpack | awk '{print $3}' | cut -d'-' -f1 | head -n 1 | cut -d'+' -f1)
+          
+          # Build the wheel
+          python -m build --wheel
+          
+          # Rename wheel to include build info
+          echo "Created wheel(s):"
+          ls -la dist/
+
+      - name: Upload wheel artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          # TODO: use matrix to identify/extract jetpack version dynamically for this wheel naming pattern
+          name: wheels-jetpack-6.2.1
+          path: dist/*.whl
+          retention-days: 400
+
+  release:
+    needs: build-wheels
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all wheel artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: all-wheels/
+
+      - name: Organize wheels
+        run: |
+          mkdir -p wheels/
+          find all-wheels/ -name "*.whl" -exec cp {} wheels/ \;
+          ls -la wheels/
+
+      - name: Get commit info
+        id: commit
+        run: |
+          echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          echo "commit_message=$(git log -1 --pretty=%B | head -1)" >> $GITHUB_OUTPUT
+          echo "timestamp=$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: wheels-${{ steps.commit.outputs.timestamp }}-${{ steps.commit.outputs.sha_short }}
+          release_name: Wheels ${{ steps.commit.outputs.timestamp }} (${{ steps.commit.outputs.sha_short }})
+          body: |
+            Automated wheel build for commit ${{ steps.commit.outputs.sha_short }}
+            
+            **Commit:** ${{ steps.commit.outputs.commit_message }}
+            **Built:** ${{ steps.commit.outputs.timestamp }}
+            
+            Available wheels:
+            $(ls wheels/ | sed 's/^/- /')
+            
+            ## Installation
+            
+            Download the appropriate wheel for your architecture and install:
+            ```bash
+            pip install <wheel-file>
+            ```
+
+            Or use the direct download URL in your requirements.
+          draft: false
+          prerelease: false
+
+      - name: Upload wheels to release
+        run: |
+          for wheel in wheels/*.whl; do
+            echo "Uploading $wheel"
+            gh release upload wheels-${{ steps.commit.outputs.timestamp }}-${{ steps.commit.outputs.sha_short }} "$wheel"
+          done
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update latest release pointer
+        run: |
+          # Create/update a 'latest' release that points to the newest wheels
+          gh release delete latest --yes || true
+          gh release create latest wheels/*.whl \
+            --title "Latest Wheels" \
+            --notes "Latest automated wheel build. Updated: ${{ steps.commit.outputs.timestamp }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -3,15 +3,10 @@ name: Build and Release Wheels
 on:
   push:
     branches:
-    - master
+      - master
   release:
     types:
-    - published
-
-# Avoid running multiple tests in parallel
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+      - published
 
 jobs:
   build-wheels:

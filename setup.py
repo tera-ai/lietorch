@@ -29,6 +29,7 @@ setup(
                     '-gencode=arch=compute_70,code=sm_70', 
                     '-gencode=arch=compute_75,code=sm_75',
                     '-gencode=arch=compute_75,code=compute_75',
+                    '-gencode=arch=compute_87,code=sm_87',
                     
                 ]
             }),
@@ -50,6 +51,7 @@ setup(
                     '-gencode=arch=compute_70,code=sm_70', 
                     '-gencode=arch=compute_75,code=sm_75',
                     '-gencode=arch=compute_75,code=compute_75',
+                    '-gencode=arch=compute_87,code=sm_87',
                     
                 ]
             }),
